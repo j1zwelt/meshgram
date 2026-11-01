@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Meshgram</string>
+    <string name="user">User</string>
+    <string name="message">Message</string>
+    <string name="add">Add</string>
+    <string name="send">Send</string>
+    <string name="back_to_chats">Back to chats</string>
+    <string name="more">More</string>
+</resources>
