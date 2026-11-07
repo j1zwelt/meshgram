@@ -1,11 +1,18 @@
 package ru.j1zwelt.meshgram
 
+import android.content.SharedPreferences
 import android.os.Bundle
+import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.SnapSpec
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -24,13 +31,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,29 +49,38 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.edit
 import ru.j1zwelt.meshgram.model.Chat
 import ru.j1zwelt.meshgram.model.Message
+import ru.j1zwelt.meshgram.model.Message.Companion.toFormattedTime
+import ru.j1zwelt.meshgram.model.User
+import ru.j1zwelt.meshgram.model.User.Companion.toUser
 import ru.j1zwelt.meshgram.ui.theme.MeshgramTheme
 
 class MainActivity : ComponentActivity() {
@@ -69,55 +89,21 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MeshgramTheme {
-                val chatsList = remember { mutableStateListOf<Chat>() }
-                var currentChat by remember { mutableStateOf<Chat?>(null) }
-
-                LaunchedEffect(Unit) {
-                    if (chatsList.isEmpty()) {
-                        chatsList.add(
-                            Chat(
-                                "Sergey", mutableStateListOf(
-                                    Message("Привет!", false),
-                                    Message("Как дела?", false),
-                                    Message("Дарова!", true),
-                                    Message("Все збс", true)
-                                )
-                            )
+                val context = LocalContext.current
+                val sharedPref = remember {
+                    context.getSharedPreferences("my_prefs", MODE_PRIVATE)
+                }
+                var userInfo by remember {
+                    mutableStateOf(
+                        sharedPref.getString(
+                            "my_profile", null
                         )
-                        chatsList.add(
-                            Chat(
-                                "Damir", mutableStateListOf(
-                                    Message("Дарова", false),
-                                    Message("Как жизнь?", false),
-                                    Message("Охаешачки", true),
-                                    Message("Миша, все хуйня", true),
-                                )
-                            )
-                        )
-                    }
+                    )
                 }
 
-                AnimatedContent(
-                    currentChat, transitionSpec = {
-                        if (targetState != null) {
-                            slideInHorizontally(initialOffsetX = { it }) togetherWith slideOutHorizontally(
-                                targetOffsetX = { -it / 4 })
-                        } else {
-                            slideInHorizontally(initialOffsetX = { -it / 4 }) togetherWith slideOutHorizontally(
-                                targetOffsetX = { it })
-                        }
-                    }) { chat ->
-                    Box(Modifier.fillMaxSize()) {
-                        Chats(chatsList) {
-                            currentChat = it
-                        }
-
-                        if (chat != null) {
-                            Chat(chat) {
-                                currentChat = null
-                            }
-                        }
-                    }
+                if (userInfo != null) MeshgramApp(sharedPref)
+                else Register(sharedPref) { savedJson ->
+                    userInfo = savedJson
                 }
             }
         }
@@ -126,17 +112,94 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Chats(chats: SnapshotStateList<Chat>, onChatClick: (chat: Chat) -> Unit) {
-    Scaffold(topBar = {
-        TopAppBar({ Text(stringResource(R.string.app_name)) }, actions = {
-            IconButton(onClick = { }) {
-                Icon(
-                    Icons.Default.MoreVert, stringResource(R.string.more)
+fun MeshgramApp(sharedPref: SharedPreferences) {
+    var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.CHATS) }
+
+    val chatsList = remember { mutableStateListOf<Chat>() }
+    var currentChat by remember { mutableStateOf<Chat?>(null) }
+
+    LaunchedEffect(Unit) {
+        if (chatsList.isEmpty()) {
+            chatsList.add(
+                Chat(
+                    User("Sergey", "bogom_dan"), mutableStateListOf(
+                        Message("Привет!", false),
+                        Message("Как дела?", false),
+                        Message("Дарова!", true),
+                        Message("Все збс", true)
+                    )
                 )
+            )
+        }
+    }
+
+    NavigationSuiteScaffold(
+        navigationSuiteItems = {
+            AppDestinations.entries.forEach {
+                item(
+                    icon = {
+                        Icon(
+                            it.icon, contentDescription = it.label
+                        )
+                    },
+                    label = { Text(it.label) },
+                    selected = it == currentDestination,
+                    onClick = { currentDestination = it })
             }
-        })
+        }) {
+        when (currentDestination) {
+            AppDestinations.CHATS -> {
+                Chats(chatsList) { currentChat = it }
+            }
+
+            AppDestinations.PROFILE -> {
+                Profile(sharedPref)
+            }
+        }
+    }
+
+    AnimatedContent(
+        targetState = currentChat,
+        transitionSpec = {
+            if (targetState != null) {
+                (fadeIn(tween(300)) + slideInHorizontally(tween(300)) { it }).togetherWith(
+                    fadeOut(
+                        tween(100)
+                    )
+                )
+            } else {
+                fadeIn(tween(100)).togetherWith(
+                    fadeOut(tween(300)) + slideOutHorizontally(tween(300)) { it })
+            }.using(
+                SizeTransform(false) { _, _ -> SnapSpec() })
+        },
+    ) {
+        if (it != null) {
+            Chat(it) {
+                currentChat = null
+            }
+        }
+    }
+}
+
+enum class AppDestinations(
+    val label: String,
+    val icon: ImageVector,
+) {
+    CHATS("Chats", Icons.AutoMirrored.Filled.Chat), PROFILE("Profile", Icons.Default.Person)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun Chats(chats: SnapshotStateList<Chat>, onChatClick: (chat: Chat) -> Unit) {
+    var showAddChatDialog by remember { mutableStateOf(false) }
+
+    Scaffold(topBar = {
+        TopAppBar({ Text(stringResource(R.string.app_name)) })
     }, floatingActionButton = {
-        FloatingActionButton({}) {
+        FloatingActionButton({
+            showAddChatDialog = true
+        }) {
             Icon(Icons.Default.Add, stringResource(R.string.add))
         }
     }) { innerPadding ->
@@ -148,6 +211,10 @@ fun Chats(chats: SnapshotStateList<Chat>, onChatClick: (chat: Chat) -> Unit) {
             }
         }
     }
+
+    if (showAddChatDialog) AddChat(chats) {
+        showAddChatDialog = false
+    }
 }
 
 @Composable
@@ -156,7 +223,7 @@ fun ChatItem(chat: Chat, onClick: () -> Unit) {
         onClick,
         Modifier
             .fillMaxWidth()
-            .padding(12.dp, 8.dp),
+            .padding(12.dp, 4.dp),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(0.5f)
@@ -167,18 +234,7 @@ fun ChatItem(chat: Chat, onClick: () -> Unit) {
                 .fillMaxWidth()
                 .padding(16.dp), verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                Modifier
-                    .size(48.dp)
-                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-                Alignment.Center
-            ) {
-                Text(
-                    chat.userName.take(1).uppercase(),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
+            UserImage(chat.user.name ?: chat.user.userName, 48.dp)
 
             Spacer(Modifier.width(16.dp))
 
@@ -187,7 +243,7 @@ fun ChatItem(chat: Chat, onClick: () -> Unit) {
                     Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically
                 ) {
                     Text(
-                        chat.userName,
+                        chat.user.name ?: chat.user.userName,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
@@ -195,7 +251,7 @@ fun ChatItem(chat: Chat, onClick: () -> Unit) {
                     )
 
                     Text(
-                        "16:45",
+                        chat.messages.lastOrNull()?.time?.toFormattedTime() ?: "",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(0.5f)
                     )
@@ -204,7 +260,7 @@ fun ChatItem(chat: Chat, onClick: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
 
                 Text(
-                    chat.messages.lastOrNull()?.text ?: "",
+                    chat.messages.lastOrNull()?.text ?: stringResource(R.string.no_messages),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium,
@@ -217,94 +273,203 @@ fun ChatItem(chat: Chat, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Chat(chat: Chat, onDismiss: () -> Unit) {
-    BackHandler {
-        onDismiss()
-    }
+fun AddChat(chats: SnapshotStateList<Chat>, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState()
+    var userName by remember { mutableStateOf("") }
 
-    val dismissState = rememberSwipeToDismissBoxState()
-    if (dismissState.currentValue == SwipeToDismissBoxValue.StartToEnd) {
-        LaunchedEffect(Unit) {
-            dismissState.snapTo(SwipeToDismissBoxValue.Settled)
-            onDismiss()
+    ModalBottomSheet(
+        sheetState = sheetState,
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(32.dp, 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                stringResource(R.string.create_new_chat),
+                style = MaterialTheme.typography.titleLarge
+            )
+
+            OutlinedTextField(
+                value = userName,
+                onValueChange = { userName = it },
+                label = { Text(stringResource(R.string.username)) },
+                leadingIcon = {
+                    Text(
+                        "@",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Button(
+                {
+                    val chat = Chat(
+                        User(null, "@${userName.replace("@", "").trim()}"), mutableStateListOf()
+                    )
+                    chats.add(chat)
+                    onDismiss()
+                }, Modifier.fillMaxWidth(), enabled = userName.isNotEmpty()
+            ) {
+                Text(stringResource(R.string.save_changes))
+            }
         }
     }
+}
+
+@Composable
+fun Profile(sharedPref: SharedPreferences) {
+    val userInfo = sharedPref.getString("my_profile", null).toUser()
+
+    var name by remember { mutableStateOf(userInfo.name!!) }
+    var userName by remember { mutableStateOf(userInfo.userName) }
+    var oldName by remember { mutableStateOf(userInfo.name!!) }
+    var oldUserName by remember { mutableStateOf(userInfo.userName) }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(48.dp, 147.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        UserImage(name, 96.dp)
+
+        Spacer(Modifier.height(16.dp))
+
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text(stringResource(R.string.name)) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = userName,
+            onValueChange = { userName = it },
+            label = { Text(stringResource(R.string.username)) },
+            leadingIcon = {
+                Text(
+                    "@",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        Button(
+            {
+                val user = User(name.trim(), userName.replace("@", "").trim())
+                sharedPref.edit(true) {
+                    putString("my_profile", user.toGson())
+                }
+
+                oldName = name.trim()
+                oldUserName = userName.trim()
+            },
+            Modifier.fillMaxWidth(),
+            enabled = (oldName != name || oldUserName != userName) && name.isNotEmpty() && userName.isNotEmpty()
+        ) {
+            Text(stringResource(R.string.save_changes))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun Chat(chat: Chat, onDismiss: () -> Unit) {
+    val listState = rememberLazyListState(
+        if (chat.messages.isNotEmpty()) chat.messages.lastIndex else 0
+    )
 
     var textMessage by remember { mutableStateOf("") }
 
-    SwipeToDismissBox(
-        dismissState, enableDismissFromEndToStart = false, backgroundContent = {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
-            )
-        }) {
-        Scaffold(topBar = {
-            TopAppBar({ Text(chat.userName) }, navigationIcon = {
-                IconButton(onClick = { onDismiss() }) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back_to_chats)
-                    )
-                }
-            }, actions = {
-                IconButton(onClick = { }) {
-                    Icon(
-                        Icons.Default.MoreVert, stringResource(R.string.more)
-                    )
-                }
-            })
-        }) { innerPadding ->
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                ) {
-                    LazyColumn {
-                        items(chat.messages) {
-                            MessageItem(it)
-                        }
-                    }
-                }
+    LaunchedEffect(chat.messages.size) {
+        if (chat.messages.isNotEmpty()) listState.animateScrollToItem(chat.messages.lastIndex)
+    }
 
-                Row(
-                    Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically
+    Scaffold(topBar = {
+        TopAppBar({ Text(chat.user.name ?: chat.user.userName) }, actions = {
+            IconButton(onClick = {
+                // TODO: Меню действий
+            }) {
+                Icon(
+                    Icons.Default.MoreVert, stringResource(R.string.more)
+                )
+            }
+        }, navigationIcon = {
+            IconButton(onClick = { onDismiss() }) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back_to_chats)
+                )
+            }
+        })
+    }) { innerPadding ->
+        Column(Modifier.padding(innerPadding)) {
+            Box(Modifier.weight(1f)) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Bottom,
                 ) {
-                    OutlinedTextField(
-                        textMessage,
-                        onValueChange = { textMessage = it },
-                        maxLines = 3,
-                        placeholder = { Text(stringResource(R.string.message)) },
-                        shape = CircleShape,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(end = 8.dp)
-                    )
-
-                    IconButton(
-                        {
-                            chat.messages.add(Message(textMessage.trim(), true))
-                            textMessage = ""
-                        },
-                        Modifier
-                            .background(MaterialTheme.colorScheme.primary, CircleShape)
-                            .size(52.dp),
-                        enabled = !textMessage.isEmpty()
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            stringResource(R.string.send),
-                            tint = MaterialTheme.colorScheme.onPrimary
-                        )
+                    items(chat.messages) {
+                        MessageItem(it)
                     }
                 }
             }
+
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    textMessage,
+                    onValueChange = { textMessage = it },
+                    maxLines = 3,
+                    placeholder = { Text(stringResource(R.string.message)) },
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp)
+                )
+
+                IconButton(
+                    {
+                        chat.messages.add(Message(textMessage.trim(), true))
+                        textMessage = ""
+                    },
+                    Modifier
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        .size(52.dp),
+                    enabled = !textMessage.isEmpty()
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        stringResource(R.string.send),
+                        tint = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+            }
         }
+    }
+
+    BackHandler {
+        onDismiss()
     }
 }
 
@@ -327,11 +492,99 @@ fun MessageItem(message: Message) {
             ) {
                 Text(message.text)
                 Text(
-                    "16:45",
+                    message.time.toFormattedTime(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(0.6f)
                 )
             }
         }
+    }
+}
+
+@Composable
+fun Register(sharedPref: SharedPreferences, onSaveJson: (json: String) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var userName by remember { mutableStateOf("") }
+
+    Scaffold { innerPadding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(48.dp, 147.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            AndroidView(
+                { context ->
+                    ImageView(context).apply {
+                        setImageResource(R.mipmap.ic_launcher_round)
+                    }
+                }, Modifier.size(147.dp)
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            Text(
+                stringResource(R.string.enter_your_details_to_start_chatting),
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text(stringResource(R.string.name)) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = userName,
+                onValueChange = { userName = it },
+                label = { Text(stringResource(R.string.username)) },
+                leadingIcon = {
+                    Text(
+                        "@",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            Button(
+                {
+                    val user = User(name.trim(), userName.replace("@", "").trim())
+                    sharedPref.edit(true) {
+                        putString("my_profile", user.toGson())
+                    }
+                    onSaveJson(user.toGson())
+                }, Modifier.fillMaxWidth(), enabled = name.isNotEmpty() && userName.isNotEmpty()
+            ) {
+                Text(stringResource(R.string.save_changes))
+            }
+        }
+    }
+}
+
+@Composable
+fun UserImage(userName: String, size: Dp) {
+    Box(
+        Modifier
+            .size(size)
+            .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+        Alignment.Center
+    ) {
+        Text(
+            userName.take(1).uppercase(),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onPrimaryContainer
+        )
     }
 }

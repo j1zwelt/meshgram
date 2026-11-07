@@ -6,4 +6,10 @@
     <string name="send">Send</string>
     <string name="back_to_chats">Back to chats</string>
     <string name="more">More</string>
+    <string name="name">Name</string>
+    <string name="username">Username</string>
+    <string name="save_changes">Save changes</string>
+    <string name="enter_your_details_to_start_chatting">Enter your details to start chatting</string>
+    <string name="create_new_chat">Create new chat</string>
+    <string name="no_messages">No messages...</string>
 </resources>
