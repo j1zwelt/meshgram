@@ -1,12 +1,16 @@
 package ru.j1zwelt.meshgram
 
+import android.bluetooth.BluetoothAdapter
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.SnapSpec
@@ -76,6 +80,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.edit
+import ru.j1zwelt.meshgram.mesh.MeshManager
 import ru.j1zwelt.meshgram.model.Chat
 import ru.j1zwelt.meshgram.model.Message
 import ru.j1zwelt.meshgram.model.Message.Companion.toFormattedTime
@@ -114,9 +119,27 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MeshgramApp(sharedPref: SharedPreferences) {
     var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.CHATS) }
+    val context = LocalContext.current
+    val mesh = remember { MeshManager(context) }
+
+    val enableLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {}
 
     val chatsList = remember { mutableStateListOf<Chat>() }
     var currentChat by remember { mutableStateOf<Chat?>(null) }
+
+    LaunchedEffect(Unit) {
+        val discoverableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+            putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
+        }
+        enableLauncher.launch(discoverableIntent)
+
+        mesh.startServer(chatsList, sharedPref) {
+            val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            enableLauncher.launch(enableIntent)
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (chatsList.isEmpty()) {
@@ -159,7 +182,7 @@ fun MeshgramApp(sharedPref: SharedPreferences) {
     }
 
     AnimatedContent(
-        targetState = currentChat,
+        currentChat,
         transitionSpec = {
             if (targetState != null) {
                 (fadeIn(tween(300)) + slideInHorizontally(tween(300)) { it }).togetherWith(
@@ -175,7 +198,8 @@ fun MeshgramApp(sharedPref: SharedPreferences) {
         },
     ) {
         if (it != null) {
-            Chat(it) {
+            Chat(mesh, sharedPref, it) {
+                mesh.unregisterReceiver()
                 currentChat = null
             }
         }
@@ -390,11 +414,24 @@ fun Profile(sharedPref: SharedPreferences) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Chat(chat: Chat, onDismiss: () -> Unit) {
+fun Chat(mesh: MeshManager, sharedPref: SharedPreferences, chat: Chat, onDismiss: () -> Unit) {
+    val enableLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {}
+
+    LaunchedEffect(Unit) {
+        mesh.findDevices(onTurnBluetooth = {
+            val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            enableLauncher.launch(enableIntent)
+        }, onTurnLocation = {
+            val enableIntent = Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+            enableLauncher.launch(enableIntent)
+        })
+    }
+
     val listState = rememberLazyListState(
         if (chat.messages.isNotEmpty()) chat.messages.lastIndex else 0
     )
-
     var textMessage by remember { mutableStateOf("") }
 
     LaunchedEffect(chat.messages.size) {
@@ -450,7 +487,10 @@ fun Chat(chat: Chat, onDismiss: () -> Unit) {
 
                 IconButton(
                     {
-                        chat.messages.add(Message(textMessage.trim(), true))
+                        val profile = sharedPref.getString("my_profile", "").toUser()
+                        val message = Message(textMessage, true, profile.userName, chat.user.userName)
+                        mesh.sendMessage(message)
+                        chat.messages.add(message)
                         textMessage = ""
                     },
                     Modifier

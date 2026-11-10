@@ -12,4 +12,5 @@
     <string name="enter_your_details_to_start_chatting">Enter your details to start chatting</string>
     <string name="create_new_chat">Create new chat</string>
     <string name="no_messages">No messages...</string>
+    <string name="please_grant_all_permissions">Please, grant all permissions</string>
 </resources>
