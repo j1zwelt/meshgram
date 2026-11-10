@@ -7,14 +7,10 @@ import java.util.Locale
 data class Message(
     val text: String = "",
     val isFromMe: Boolean = false,
-    val fromUser: String? = null,
+    val fromUser: User? = null,
     val toUser: String? = null,
     val time: Long = System.currentTimeMillis()
 ) {
-    fun toGson(): String {
-        return Gson().toJson(this)
-    }
-
     companion object {
         fun Long.toFormattedTime(): String {
             val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())

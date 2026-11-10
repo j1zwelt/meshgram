@@ -7,9 +7,11 @@ import android.os.Bundle
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
@@ -80,8 +82,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.edit
+import com.google.gson.Gson
 import ru.j1zwelt.meshgram.mesh.MeshManager
 import ru.j1zwelt.meshgram.model.Chat
+import ru.j1zwelt.meshgram.model.Chat.Companion.toChatsList
 import ru.j1zwelt.meshgram.model.Message
 import ru.j1zwelt.meshgram.model.Message.Companion.toFormattedTime
 import ru.j1zwelt.meshgram.model.User
@@ -89,15 +93,23 @@ import ru.j1zwelt.meshgram.model.User.Companion.toUser
 import ru.j1zwelt.meshgram.ui.theme.MeshgramTheme
 
 class MainActivity : ComponentActivity() {
+    private lateinit var chatsList: SnapshotStateList<Chat>
+    private lateinit var sharedPref: SharedPreferences
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             MeshgramTheme {
                 val context = LocalContext.current
-                val sharedPref = remember {
+                sharedPref = remember {
                     context.getSharedPreferences("my_prefs", MODE_PRIVATE)
                 }
+                chatsList = remember {
+                    val savedChatsJson = sharedPref.getString("saved_chats", "")
+                    savedChatsJson.toChatsList()
+                }
+
                 var userInfo by remember {
                     mutableStateOf(
                         sharedPref.getString(
@@ -106,18 +118,25 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                if (userInfo != null) MeshgramApp(sharedPref)
-                else Register(sharedPref) { savedJson ->
-                    userInfo = savedJson
+                if (userInfo != null) MeshgramApp(sharedPref, chatsList)
+                else Register(sharedPref) {
+                    userInfo = it
                 }
             }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sharedPref.edit(true) {
+            putString("saved_chats", Gson().toJson(chatsList))
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MeshgramApp(sharedPref: SharedPreferences) {
+fun MeshgramApp(sharedPref: SharedPreferences, chatsList: SnapshotStateList<Chat>) {
     var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.CHATS) }
     val context = LocalContext.current
     val mesh = remember { MeshManager(context) }
@@ -126,33 +145,13 @@ fun MeshgramApp(sharedPref: SharedPreferences) {
         ActivityResultContracts.StartActivityForResult()
     ) {}
 
-    val chatsList = remember { mutableStateListOf<Chat>() }
     var currentChat by remember { mutableStateOf<Chat?>(null) }
 
     LaunchedEffect(Unit) {
-        val discoverableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
-            putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
-        }
-        enableLauncher.launch(discoverableIntent)
-
+        enableLauncher.requestDiscoverable()
         mesh.startServer(chatsList, sharedPref) {
             val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
             enableLauncher.launch(enableIntent)
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        if (chatsList.isEmpty()) {
-            chatsList.add(
-                Chat(
-                    User("Sergey", "bogom_dan"), mutableStateListOf(
-                        Message("Привет!", false),
-                        Message("Как дела?", false),
-                        Message("Дарова!", true),
-                        Message("Все збс", true)
-                    )
-                )
-            )
         }
     }
 
@@ -258,7 +257,7 @@ fun ChatItem(chat: Chat, onClick: () -> Unit) {
                 .fillMaxWidth()
                 .padding(16.dp), verticalAlignment = Alignment.CenterVertically
         ) {
-            UserImage(chat.user.name ?: chat.user.userName, 48.dp)
+            UserImage(chat.user.name ?: chat.user.userName ?: "", 48.dp)
 
             Spacer(Modifier.width(16.dp))
 
@@ -267,7 +266,7 @@ fun ChatItem(chat: Chat, onClick: () -> Unit) {
                     Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically
                 ) {
                     Text(
-                        chat.user.name ?: chat.user.userName,
+                        chat.user.name ?: "@${chat.user.userName}",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
@@ -336,7 +335,7 @@ fun AddChat(chats: SnapshotStateList<Chat>, onDismiss: () -> Unit) {
             Button(
                 {
                     val chat = Chat(
-                        User(null, "@${userName.replace("@", "").trim()}"), mutableStateListOf()
+                        User(null, userName.replace("@", "").trim()), mutableStateListOf()
                     )
                     chats.add(chat)
                     onDismiss()
@@ -352,10 +351,10 @@ fun AddChat(chats: SnapshotStateList<Chat>, onDismiss: () -> Unit) {
 fun Profile(sharedPref: SharedPreferences) {
     val userInfo = sharedPref.getString("my_profile", null).toUser()
 
-    var name by remember { mutableStateOf(userInfo.name!!) }
-    var userName by remember { mutableStateOf(userInfo.userName) }
-    var oldName by remember { mutableStateOf(userInfo.name!!) }
-    var oldUserName by remember { mutableStateOf(userInfo.userName) }
+    var name by remember { mutableStateOf(userInfo.name ?: "") }
+    var userName by remember { mutableStateOf(userInfo.userName ?: "") }
+    var oldName by remember { mutableStateOf(userInfo.name ?: "") }
+    var oldUserName by remember { mutableStateOf(userInfo.userName ?: "") }
 
     Column(
         Modifier
@@ -398,7 +397,7 @@ fun Profile(sharedPref: SharedPreferences) {
             {
                 val user = User(name.trim(), userName.replace("@", "").trim())
                 sharedPref.edit(true) {
-                    putString("my_profile", user.toGson())
+                    putString("my_profile", Gson().toJson(user))
                 }
 
                 oldName = name.trim()
@@ -439,7 +438,7 @@ fun Chat(mesh: MeshManager, sharedPref: SharedPreferences, chat: Chat, onDismiss
     }
 
     Scaffold(topBar = {
-        TopAppBar({ Text(chat.user.name ?: chat.user.userName) }, actions = {
+        TopAppBar({ Text(chat.user.name ?: "@${chat.user.userName}") }, actions = {
             IconButton(onClick = {
                 // TODO: Меню действий
             }) {
@@ -488,7 +487,7 @@ fun Chat(mesh: MeshManager, sharedPref: SharedPreferences, chat: Chat, onDismiss
                 IconButton(
                     {
                         val profile = sharedPref.getString("my_profile", "").toUser()
-                        val message = Message(textMessage, true, profile.userName, chat.user.userName)
+                        val message = Message(textMessage, true, profile, chat.user.userName)
                         mesh.sendMessage(message)
                         chat.messages.add(message)
                         textMessage = ""
@@ -602,9 +601,9 @@ fun Register(sharedPref: SharedPreferences, onSaveJson: (json: String) -> Unit) 
                 {
                     val user = User(name.trim(), userName.replace("@", "").trim())
                     sharedPref.edit(true) {
-                        putString("my_profile", user.toGson())
+                        putString("my_profile", Gson().toJson(user))
                     }
-                    onSaveJson(user.toGson())
+                    onSaveJson(Gson().toJson(user))
                 }, Modifier.fillMaxWidth(), enabled = name.isNotEmpty() && userName.isNotEmpty()
             ) {
                 Text(stringResource(R.string.save_changes))
@@ -627,4 +626,11 @@ fun UserImage(userName: String, size: Dp) {
             color = MaterialTheme.colorScheme.onPrimaryContainer
         )
     }
+}
+
+fun ManagedActivityResultLauncher<Intent, ActivityResult>.requestDiscoverable() {
+    val discoverableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+        putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 0)
+    }
+    this.launch(discoverableIntent)
 }
