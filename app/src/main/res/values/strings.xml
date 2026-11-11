@@ -13,4 +13,5 @@
     <string name="create_new_chat">Create new chat</string>
     <string name="no_messages">No messages...</string>
     <string name="please_grant_all_permissions">Please, grant all permissions</string>
+    <string name="start_discoverable">Start discoverable</string>
 </resources>

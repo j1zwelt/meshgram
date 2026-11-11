@@ -47,6 +47,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -141,11 +142,11 @@ fun MeshgramApp(sharedPref: SharedPreferences, chatsList: SnapshotStateList<Chat
     val context = LocalContext.current
     val mesh = remember { MeshManager(context) }
 
+    var currentChat by remember { mutableStateOf<Chat?>(null) }
+
     val enableLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {}
-
-    var currentChat by remember { mutableStateOf<Chat?>(null) }
 
     LaunchedEffect(Unit) {
         enableLauncher.requestDiscoverable()
@@ -153,6 +154,13 @@ fun MeshgramApp(sharedPref: SharedPreferences, chatsList: SnapshotStateList<Chat
             val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
             enableLauncher.launch(enableIntent)
         }
+        mesh.findDevices(onTurnBluetooth = {
+            val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            enableLauncher.launch(enableIntent)
+        }, onTurnLocation = {
+            val enableIntent = Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+            enableLauncher.launch(enableIntent)
+        })
     }
 
     NavigationSuiteScaffold(
@@ -198,7 +206,6 @@ fun MeshgramApp(sharedPref: SharedPreferences, chatsList: SnapshotStateList<Chat
     ) {
         if (it != null) {
             Chat(mesh, sharedPref, it) {
-                mesh.unregisterReceiver()
                 currentChat = null
             }
         }
@@ -215,10 +222,19 @@ enum class AppDestinations(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Chats(chats: SnapshotStateList<Chat>, onChatClick: (chat: Chat) -> Unit) {
+    val enableLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {}
     var showAddChatDialog by remember { mutableStateOf(false) }
 
     Scaffold(topBar = {
-        TopAppBar({ Text(stringResource(R.string.app_name)) })
+        TopAppBar({ Text(stringResource(R.string.app_name)) }, actions = {
+            IconButton(onClick = {
+                enableLauncher.requestDiscoverable()
+            }) {
+                Icon(Icons.Default.Search, stringResource(R.string.start_discoverable))
+            }
+        })
     }, floatingActionButton = {
         FloatingActionButton({
             showAddChatDialog = true
@@ -414,20 +430,6 @@ fun Profile(sharedPref: SharedPreferences) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Chat(mesh: MeshManager, sharedPref: SharedPreferences, chat: Chat, onDismiss: () -> Unit) {
-    val enableLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {}
-
-    LaunchedEffect(Unit) {
-        mesh.findDevices(onTurnBluetooth = {
-            val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            enableLauncher.launch(enableIntent)
-        }, onTurnLocation = {
-            val enableIntent = Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)
-            enableLauncher.launch(enableIntent)
-        })
-    }
-
     val listState = rememberLazyListState(
         if (chat.messages.isNotEmpty()) chat.messages.lastIndex else 0
     )

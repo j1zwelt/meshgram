@@ -13,6 +13,7 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.os.Build
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
@@ -25,6 +26,7 @@ import ru.j1zwelt.meshgram.model.Message.Companion.toMessage
 import ru.j1zwelt.meshgram.model.User.Companion.toUser
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
 class MeshManager(val context: Context) {
@@ -34,10 +36,9 @@ class MeshManager(val context: Context) {
     private val locationManager =
         context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     private val bluetoothAdapter = bluetoothManager.adapter
-    private val discoveredDevices = HashSet<BluetoothDevice>()
+    private val discoveredDevices = ConcurrentHashMap.newKeySet<BluetoothDevice>()
     private var serverSocket: BluetoothServerSocket? = null
     private var isServerRunning = false
-
     private val bluetoothReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
@@ -72,12 +73,24 @@ class MeshManager(val context: Context) {
     }
 
     fun findDevices(onTurnBluetooth: () -> Unit, onTurnLocation: () -> Unit) {
-        if (ActivityCompat.checkSelfPermission(
-                context, Manifest.permission.BLUETOOTH_SCAN
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            Log.w("MeshManager", "findDevices: BLUETOOTH_SCAN != PERMISSION_GRANTED")
-            return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            //Android 12+
+            if (ActivityCompat.checkSelfPermission(
+                    context, Manifest.permission.BLUETOOTH_SCAN
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                Log.w("MeshManager", "findDevices: Нет разрешения BLUETOOTH_SCAN")
+                return
+            }
+        } else {
+            //Android 11-
+            if (ActivityCompat.checkSelfPermission(
+                    context, Manifest.permission.ACCESS_FINE_LOCATION
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                Log.w("MeshManager", "findDevices: Нет разрешения ACCESS_FINE_LOCATION")
+                return
+            }
         }
 
         if (!bluetoothAdapter.isEnabled) {
@@ -90,9 +103,9 @@ class MeshManager(val context: Context) {
             onTurnLocation()
         }
 
+        discoveredDevices.clear()
         if (bluetoothAdapter.isDiscovering) bluetoothAdapter.cancelDiscovery()
         registerReceiver()
-        discoveredDevices.clear()
 
         val started = bluetoothAdapter.startDiscovery()
         Log.i("MeshManager", "findDevices: $started")
@@ -165,8 +178,7 @@ class MeshManager(val context: Context) {
                                                 "startServer: ПРИНЯТО СООБЩЕНИЕ ${copyMessage.text}"
                                             )
                                         } else {
-//                                            sendMessage(message)
-
+                                            sendMessage(message)
                                             Log.w(
                                                 "MeshManager",
                                                 "startServer: Принято чужое сообщение (${message.toUser}/${profile.userName})"
@@ -196,56 +208,33 @@ class MeshManager(val context: Context) {
                 context, Manifest.permission.BLUETOOTH_CONNECT
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            Log.w("MeshManager", "BLUETOOTH_CONNECT != PERMISSION_GRANTED")
+            Log.w("MeshManager", "sendMessage: BLUETOOTH_CONNECT != PERMISSION_GRANTED")
             return
         }
 
-        discoveredDevices.forEach { device ->
-            thread(true) {
-                var socket: BluetoothSocket? = null
+        val message = Gson().toJson(message).toByteArray(Charsets.UTF_8)
+
+        thread(true) {
+            for (phone in discoveredDevices) {
                 try {
-                    Log.i("MeshManager", "sendMessage: Попытка подключения к [${device.address}]")
-
-                    socket = device.createInsecureRfcommSocketToServiceRecord(uuid)
-
-                    if (bluetoothAdapter.isDiscovering) bluetoothAdapter.cancelDiscovery()
-
-                    socket.connect()
-                    Log.i("MeshManager", "sendMessage: Успешно подключились к [${device.address}]")
-
-                    val outputStream = socket.outputStream
-
-                    outputStream.write(Gson().toJson(message).toByteArray(Charsets.UTF_8))
-                    outputStream.flush()
+                    phone.createInsecureRfcommSocketToServiceRecord(uuid).use { socket ->
+                        socket.connect()
+                        val outputStream = socket.outputStream
+                        outputStream.write(message)
+                        outputStream.flush()
+                        Thread.sleep(1000)
+                    }
 
                     Log.i(
                         "MeshManager",
-                        "sendMessage: Сообщение успешно отправлено на [${device.address}]"
+                        "sendMessage: Сообщение успешно отправлено на [${phone.address}]"
                     )
+
+                    break
                 } catch (e: IOException) {
                     Log.e("MeshManager", "sendMessage: ${e.message}")
                 }
             }
-        }
-    }
-
-    fun stopServer() {
-        isServerRunning = false
-
-        try {
-            serverSocket?.close()
-            Log.i("MeshManager", "stopServer()")
-        } catch (e: IOException) {
-            Log.e("MeshManager", "stopServer: ${e.message}")
-        }
-    }
-
-    fun unregisterReceiver() {
-        try {
-            context.unregisterReceiver(bluetoothReceiver)
-            Log.i("MeshManager", "unregisterReceiver()")
-        } catch (e: IllegalArgumentException) {
-            Log.e("MeshManager", "unregisterReceiver: ${e.message}")
         }
     }
 }
