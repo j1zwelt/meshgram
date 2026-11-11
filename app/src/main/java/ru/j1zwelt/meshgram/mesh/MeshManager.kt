@@ -5,7 +5,6 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothServerSocket
-import android.bluetooth.BluetoothSocket
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -134,67 +133,64 @@ class MeshManager(val context: Context) {
                 Log.i("MeshManager", "startServer: Сервер запущен и слушает эфир...")
 
                 while (isServerRunning) {
-                    var socket: BluetoothSocket?
                     try {
-                        socket = serverSocket?.accept()
-                    } catch (e: IOException) {
-                        Log.e("MeshManager", "startServer: ${e.message}")
-                        break
-                    }
+                        serverSocket?.accept()?.let { currentSocket ->
+                            thread {
+                                currentSocket.use { socket ->
+                                    try {
+                                        val buffer = ByteArray(1024)
+                                        val bytes = socket.inputStream.read(buffer)
 
-                    socket?.let { currentSocket ->
-                        thread {
-                            currentSocket.use { s ->
-                                try {
-                                    val buffer = ByteArray(1024)
-                                    val bytes = s.inputStream.read(buffer)
+                                        if (bytes > 0) {
+                                            val message =
+                                                String(buffer, 0, bytes, Charsets.UTF_8).toMessage()
+                                            val profile =
+                                                sharedPref.getString("my_profile", "").toUser()
 
-                                    if (bytes > 0) {
-                                        val message =
-                                            String(buffer, 0, bytes, Charsets.UTF_8).toMessage()
-                                        val profile =
-                                            sharedPref.getString("my_profile", "").toUser()
+                                            if (message.toUser == profile.userName) {
+                                                val copyMessage = message.copy(isFromMe = false)
+                                                val existingChat =
+                                                    chats.find { it.user.userName == copyMessage.fromUser!!.userName }
 
-                                        if (message.toUser == profile.userName) {
-                                            val copyMessage = message.copy(isFromMe = false)
-                                            val existingChat =
-                                                chats.find { it.user.userName == copyMessage.fromUser!!.userName }
+                                                if (existingChat != null) {
+                                                    existingChat.messages.add(copyMessage)
+                                                } else {
+                                                    val newMessagesList =
+                                                        mutableStateListOf<Message>().apply {
+                                                            add(copyMessage)
+                                                        }
+                                                    val newChat = Chat(
+                                                        copyMessage.fromUser!!, newMessagesList
+                                                    )
+                                                    chats.add(newChat)
+                                                }
 
-                                            if (existingChat != null) {
-                                                existingChat.messages.add(copyMessage)
-                                            } else {
-                                                val newMessagesList =
-                                                    mutableStateListOf<Message>().apply {
-                                                        add(copyMessage)
-                                                    }
-                                                val newChat = Chat(
-                                                    copyMessage.fromUser!!, newMessagesList
+                                                Log.i(
+                                                    "MeshManager",
+                                                    "startServer: ПРИНЯТО СООБЩЕНИЕ ${copyMessage.text}"
                                                 )
-                                                chats.add(newChat)
+                                            } else {
+                                                sendMessage(message, socket.remoteDevice.address)
+                                                Log.w(
+                                                    "MeshManager",
+                                                    "startServer: Принято чужое сообщение (${message.toUser}/${profile.userName})"
+                                                )
                                             }
-
-                                            Log.i(
+                                        } else if (bytes == -1) {
+                                            Log.e(
                                                 "MeshManager",
-                                                "startServer: ПРИНЯТО СООБЩЕНИЕ ${copyMessage.text}"
-                                            )
-                                        } else {
-                                            sendMessage(message)
-                                            Log.w(
-                                                "MeshManager",
-                                                "startServer: Принято чужое сообщение (${message.toUser}/${profile.userName})"
+                                                "startServer: Соединение закрыто удаленным устройством"
                                             )
                                         }
-                                    } else if (bytes == -1) {
-                                        Log.e(
-                                            "MeshManager",
-                                            "startServer: Соединение закрыто удаленным устройством"
-                                        )
+                                    } catch (e: IOException) {
+                                        Log.e("MeshManager", "startServer: ${e.message} (socket)")
                                     }
-                                } catch (e: IOException) {
-                                    Log.e("MeshManager", "startServer: ${e.message} (socket)")
                                 }
                             }
                         }
+                    } catch (e: IOException) {
+                        Log.e("MeshManager", "startServer: ${e.message}")
+                        break
                     }
                 }
             } catch (e: IOException) {
@@ -203,7 +199,7 @@ class MeshManager(val context: Context) {
         }
     }
 
-    fun sendMessage(message: Message) {
+    fun sendMessage(message: Message, address: String? = null) {
         if (ActivityCompat.checkSelfPermission(
                 context, Manifest.permission.BLUETOOTH_CONNECT
             ) != PackageManager.PERMISSION_GRANTED
@@ -216,6 +212,7 @@ class MeshManager(val context: Context) {
 
         thread(true) {
             for (phone in discoveredDevices) {
+                if (phone.address == address) continue
                 try {
                     phone.createInsecureRfcommSocketToServiceRecord(uuid).use { socket ->
                         socket.connect()
